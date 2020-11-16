@@ -119,12 +119,50 @@ function karaskel.collect_head(subs, generate_furigana)
 	return meta, styles
 end
 
+-- Ensure that no "syllable" contains a line break
+function karaskel.preproc_split_linebreaks(syl)
+	local text = syl.text_stripped.."\n" -- guarantee there's always a \n
+	local lines = {}
+	local text_len = 0
+	local line_start = 1
+	for line_end in text:gmatch("()\n") do
+		local line = text:sub(line_start, line_end - 1)
+		table.insert(lines, line)
+		text_len = text_len + unicode.len(line)
+		line_start = line_end + 1
+	end
+	if text_len == 0 then
+		text_len = 1
+	end
+	local char_duration = syl.duration / text_len
+	local start_time = syl.start_time
+	for i = 1, #lines do
+		local line = lines[i]
+		local end_time = math.floor((start_time + unicode.len(line) * char_duration + 5) / 10) * 10
+		lines[i] = {
+			duration = end_time - start_time,
+			start_time = start_time,
+			end_time = end_time,
+			tag = syl.tag,
+			text = line,
+			text_stripped = line,
+			line_break = i < #lines,
+		}
+		start_time = end_time
+	end
+	return lines
+end
 
 -- Pre-process line, determining stripped text, karaoke data and splitting off furigana data
 -- Modifies the object passed for line
 function karaskel.preproc_line_text(meta, styles, line)
+	line_text = line.text -- keep original text safe
+	line.text = line_text:gsub("\\h",  " ") -- hard space == NBSP
+	                     :gsub("\\n",  " ") -- soft space TODO: line break if WrapStyle is 2
+	                     :gsub("\\N", "\n") -- line break
 	-- Assume line is class=dialogue
 	local kara = aegisub.parse_karaoke_data(line)
+	line.text = line_text -- restore original text
 	line.kara = { n = 0 }
 	line.furi = { n = 0 }
 	
@@ -134,119 +172,118 @@ function karaskel.preproc_line_text(meta, styles, line)
 	local worksyl = { highlights = {n=0}, furi = {n=0} }
 	local cur_inline_fx = ""
 	for i = 0, #kara do
-		local syl = kara[i]
-		
-		-- Detect any inline-fx tags
-		local inline_fx = syl.text:match("%{.*\\%-([^}\\]+)")
-		if inline_fx then
-			cur_inline_fx = inline_fx
-		end
-		
-		-- Strip spaces (only basic ones, no fullwidth etc.)
-		local prespace, syltext, postspace = syl.text_stripped:match("^([ \t]*)(.-)([ \t]*)$")
-		
-		-- See if we've broken a (possible) multi-hl stretch
-		-- If we did it's time for a new worksyl (though never for the zero'th syllable)
-		local prefix = syltext:sub(1,unicode.charwidth(syltext,1))
-		if prefix ~= "#" and prefix ~= "＃" and i > 0 then
-			line.kara[line.kara.n] = worksyl
-			line.kara.n = line.kara.n + 1
-			worksyl = { highlights = {n=0}, furi = {n=0} }
-		end
+		for j, syl in ipairs(karaskel.preproc_split_linebreaks(kara[i])) do
+			-- Detect any inline-fx tags
+			local inline_fx = syl.text:match("%{.*\\%-([^}\\]+)")
+			if inline_fx then
+				cur_inline_fx = inline_fx
+			end
+			
+			-- Strip spaces (only basic ones, no fullwidth etc.)
+			local prespace, syltext, postspace = syl.text_stripped:match("^([ \t]*)(.-)([ \t]*)$")
+			
+			-- See if we've broken a (possible) multi-hl stretch
+			-- If we did it's time for a new worksyl (though never for the zero'th syllable)
+			local prefix = syltext:sub(1,unicode.charwidth(syltext,1))
+			if prefix ~= "#" and prefix ~= "＃" and i > 0 then
+				line.kara[line.kara.n] = worksyl
+				line.kara.n = line.kara.n + 1
+				worksyl = { highlights = {n=0}, furi = {n=0} }
+			end
 
-		-- Add highlight data
-		local hl = {
-			start_time = syl.start_time,
-			end_time = syl.end_time,
-			duration = syl.duration
-		}
-		worksyl.highlights.n = worksyl.highlights.n + 1
-		worksyl.highlights[worksyl.highlights.n] = hl
-		
-		-- Detect furigana (both regular and fullwidth pipes work)
-		-- Furigana is stored independantly from syllables
-		if syltext:find("|") or syltext:find("｜") then
-			-- Replace fullwidth pipes, they aren't regex friendly
-			syltext = syltext:gsub("｜", "|")
-			-- Get before/after pipe text
-			local maintext, furitext = syltext:match("^(.-)|(.-)$")
-			syltext = maintext
+			-- Add highlight data
+			local hl = {
+				start_time = syl.start_time,
+				end_time = syl.end_time,
+				duration = syl.duration
+			}
+			worksyl.highlights.n = worksyl.highlights.n + 1
+			worksyl.highlights[worksyl.highlights.n] = hl
 			
-			local furi = { }
-			furi.syl = worksyl
+			-- Detect furigana (both regular and fullwidth pipes work)
+			-- Furigana is stored independantly from syllables
+			if syltext:find("|") or syltext:find("｜") then
+				-- Replace fullwidth pipes, they aren't regex friendly
+				syltext = syltext:gsub("｜", "|")
+				-- Get before/after pipe text
+				local maintext, furitext = syltext:match("^(.-)|(.-)$")
+				syltext = maintext
+				
+				local furi = { }
+				furi.syl = worksyl
+				
+				-- Magic happens here
+				-- isbreak = Don't join this furi visually with previous furi, even if their main texts are adjacent
+				-- spillback = Allow this furi text to spill over the left edge of the main text
+				-- (Furi is always allowed to spill over the right edge of main text.)
+				local prefix = furitext:sub(1,unicode.charwidth(furitext,1))
+				if prefix == "!" or prefix == "！" then
+					furi.isbreak = true
+					furi.spillback = false
+				elseif prefix == "<" or prefix == "＜" then
+					furi.isbreak = true
+					furi.spillback = true
+				else
+					furi.isbreak = false
+					furi.spillback = false
+				end
+				-- Remove the prefix character from furitext, if there was one
+				if furi.isbreak then
+					furitext = furitext:sub(unicode.charwidth(furitext,1)+1)
+				end
+				
+				-- Some of these may seem superflous, but a furi should ideally have the same "interface" as a syllable
+				furi.start_time = syl.start_time
+				furi.end_time = syl.end_time
+				furi.duration = syl.duration
+				furi.kdur = syl.duration / 10
+				furi.text = furitext
+				furi.text_stripped = furitext
+				furi.text_spacestripped = furitext
+				furi.line = line
+				furi.tag = syl.tag
+				furi.inline_fx = cur_inline_fx
+				furi.i = line.kara.n
+				furi.prespace = ""
+				furi.postspace = ""
+				furi.highlights = { n=1, [1]=hl }
+				furi.isfuri = true
+				
+				line.furi.n = line.furi.n + 1
+				line.furi[line.furi.n] = furi
+				worksyl.furi.n = worksyl.furi.n + 1
+				worksyl.furi[worksyl.furi.n] = furi
+			end
 			
-			-- Magic happens here
-			-- isbreak = Don't join this furi visually with previous furi, even if their main texts are adjacent
-			-- spillback = Allow this furi text to spill over the left edge of the main text
-			-- (Furi is always allowed to spill over the right edge of main text.)
-			local prefix = furitext:sub(1,unicode.charwidth(furitext,1))
-			if prefix == "!" or prefix == "！" then
-				furi.isbreak = true
-				furi.spillback = false
-			elseif prefix == "<" or prefix == "＜" then
-				furi.isbreak = true
-				furi.spillback = true
+			-- Syllables that aren't part of a multi-highlight generate a new output-syllable
+			if not worksyl.text or (prefix ~= "#" and prefix ~= "＃") then
+				-- Update stripped line-text
+				line.text_stripped = line.text_stripped .. prespace .. syltext .. postspace
+				
+				-- Copy data from syl to worksyl
+				worksyl.text = syl.text
+				worksyl.duration = syl.duration
+				worksyl.kdur = syl.duration / 10
+				worksyl.start_time = syl.start_time
+				worksyl.end_time = syl.end_time
+				worksyl.tag = syl.tag
+				worksyl.line = line
+				
+				-- And add new data to worksyl
+				worksyl.i = line.kara.n
+				worksyl.text_stripped = prespace .. syltext .. postspace -- be sure to include the spaces so the original line can be built from text_stripped
+				worksyl.inline_fx = cur_inline_fx
+				worksyl.text_spacestripped = syltext
+				worksyl.prespace = prespace
+				worksyl.postspace = postspace
 			else
-				furi.isbreak = false
-				furi.spillback = false
+				-- This is just an extra highlight
+				worksyl.duration = worksyl.duration + syl.duration
+				worksyl.kdur = worksyl.kdur + syl.duration / 10
+				worksyl.end_time = syl.end_time
 			end
-			-- Remove the prefix character from furitext, if there was one
-			if furi.isbreak then
-				furitext = furitext:sub(unicode.charwidth(furitext,1)+1)
-			end
-			
-			-- Some of these may seem superflous, but a furi should ideally have the same "interface" as a syllable
-			furi.start_time = syl.start_time
-			furi.end_time = syl.end_time
-			furi.duration = syl.duration
-			furi.kdur = syl.duration / 10
-			furi.text = furitext
-			furi.text_stripped = furitext
-			furi.text_spacestripped = furitext
-			furi.line = line
-			furi.tag = syl.tag
-			furi.inline_fx = cur_inline_fx
-			furi.i = line.kara.n
-			furi.prespace = ""
-			furi.postspace = ""
-			furi.highlights = { n=1, [1]=hl }
-			furi.isfuri = true
-			
-			line.furi.n = line.furi.n + 1
-			line.furi[line.furi.n] = furi
-			worksyl.furi.n = worksyl.furi.n + 1
-			worksyl.furi[worksyl.furi.n] = furi
-		end
-		
-		-- Syllables that aren't part of a multi-highlight generate a new output-syllable
-		if not worksyl.text or (prefix ~= "#" and prefix ~= "＃") then
-			-- Update stripped line-text
-			line.text_stripped = line.text_stripped .. prespace .. syltext .. postspace
-			
-			-- Copy data from syl to worksyl
-			worksyl.text = syl.text
-			worksyl.duration = syl.duration
-			worksyl.kdur = syl.duration / 10
-			worksyl.start_time = syl.start_time
-			worksyl.end_time = syl.end_time
-			worksyl.tag = syl.tag
-			worksyl.line = line
-			
-			-- And add new data to worksyl
-			worksyl.i = line.kara.n
-			worksyl.text_stripped = prespace .. syltext .. postspace -- be sure to include the spaces so the original line can be built from text_stripped
-			worksyl.inline_fx = cur_inline_fx
-			worksyl.text_spacestripped = syltext
-			worksyl.prespace = prespace
-			worksyl.postspace = postspace
-		else
-			-- This is just an extra highlight
-			worksyl.duration = worksyl.duration + syl.duration
-			worksyl.kdur = worksyl.kdur + syl.duration / 10
-			worksyl.end_time = syl.end_time
 		end
 	end
-
 	-- Add the last syllable
 	line.kara[line.kara.n] = worksyl
 	-- But don't increment n here, n should be the highest syllable index! (The zero'th syllable doesn't count.)
