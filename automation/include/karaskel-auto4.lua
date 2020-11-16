@@ -282,6 +282,7 @@ function karaskel.preproc_line_text(meta, styles, line)
 				worksyl.kdur = worksyl.kdur + syl.duration / 10
 				worksyl.end_time = syl.end_time
 			end
+			worksyl.line_break = syl.line_break
 		end
 	end
 	-- Add the last syllable
@@ -413,13 +414,26 @@ end
 -- Do simple syllable layouting (no furigana)
 function karaskel.do_basic_layout(meta, styles, line)
 	local curx = 0
+	local cury = 0
+	local curh = 0
 	for i = 0, line.kara.n do
 		local syl = line.kara[i]
 		syl.left = curx + syl.prespacewidth
 		syl.center = syl.left + syl.width / 2
 		syl.right = syl.left + syl.width
 		curx = curx + syl.prespacewidth + syl.width + syl.postspacewidth
+		syl.top = cury
+		syl.middle = cury + syl.height / 2
+		syl.bottom = cury + syl.height
+		curh = syl.max(curh, syl.height)
+		if syl.line_break then
+			cury = cury + curh
+			curh = 0
+			curx = 0
+		end
 	end
+	cury = cury + curh
+	line.height = cury
 end
 
 
@@ -430,11 +444,12 @@ function karaskel.do_furigana_layout(meta, styles, line)
 	-- A forced split creates a new layout group
 	local lgroups = {}
 	-- Start-sentinel
-	local lgsentinel = {basewidth=0, furiwidth=0, syls={}, furi={}, spillback=false, left=0, right=0}
+	local lgsentinel = {basewidth=0, baseheight=0, furiwidth=0, furiheight=0, syls={}, furi={}, spillback=false, left=0, right=0}
 	table.insert(lgroups, lgsentinel)
 	-- Create groups
+	local furiheight = 0
 	local last_had_furi = false
-	local lg = { basewidth=0, furiwidth=0, syls={}, furi={}, spillback=false }
+	local lg = { basewidth=0, baseheight=0, furiwidth=0, furiheight=0, syls={}, furi={}, spillback=false }
 	for s = 0, line.kara.n do
 		local syl = line.kara[s]
 		-- Furigana-less syllables always generate a new layout group
@@ -442,14 +457,15 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		-- But if current lg has no width (usually only first) don't create a new
 		aegisub.debug.out(5, "syl.furi.n=%d, isbreak=%s, last_had_furi=%s, lg.basewidth=%d\n", syl.furi.n, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n", last_had_furi and "y" or "n", lg.basewidth)
 		if (syl.furi.n == 0 or syl.furi[1].isbreak or not last_had_furi) and lg.basewidth > 0 then
-			aegisub.debug.out(5, "Inserting layout group, basewidth=%d, furiwidth=%d, isbreak=%s\n", lg.basewidth, lg.furiwidth, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
+			aegisub.debug.out(5, "Inserting layout group, basewidth=%d, baseheight=%d, furiwidth=%d, furiheight=%d, isbreak=%s\n", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
 			table.insert(lgroups, lg)
-			lg = { basewidth=0, furiwidth=0, syls={}, furi={}, spillback=false }
+			lg = { basewidth=0, baseheight=0, furiwidth=0, furiheight=0, syls={}, furi={}, spillback=false }
 			last_had_furi = false
 		end
 		
 		-- Add this syllable to lg
 		lg.basewidth = lg.basewidth + syl.prespacewidth + syl.width + syl.postspacewidth
+		lg.baseheight = math.max(lg.baseheight, syl.height)
 		table.insert(lg.syls, syl)
 		aegisub.debug.out(5, "\tAdding syllable to layout group: '%s', width=%d, isbreak=%s\n", syl.text_stripped, syl.width, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
 		
@@ -457,14 +473,20 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		for f = 1, syl.furi.n do
 			local furi = syl.furi[f]
 			lg.furiwidth = lg.furiwidth + furi.width
+			lg.furiheight = math.max(lg.furiheight, furi.height)
+			furiheight = math.max(furiheight, furi.height)
 			lg.spillback = lg.spillback or furi.spillback
 			table.insert(lg.furi, furi)
 			aegisub.debug.out(5, "\tAdding furigana to layout group: %s (width=%d)\n", furi.text, furi.width)
 			last_had_furi = true
 		end
+
+		if syl.line_break then
+			last_had_furi = false
+		end
 	end
 	-- Insert last lg
-	aegisub.debug.out(5, "Inserting layout group, basewidth=%d, furiwidth=%d\n", lg.basewidth, lg.furiwidth)
+	aegisub.debug.out(5, "Inserting layout group, basewidth=%d, baseheight=%d, furiwidth=%d, furiheight=%d\n", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
 	table.insert(lgroups, lg)
 	-- And end-sentinel
 	table.insert(lgroups, lgsentinel)
@@ -473,14 +495,16 @@ function karaskel.do_furigana_layout(meta, styles, line)
 	-- Layout the groups at macro-level
 	-- Skip sentinel at ends in loop
 	local curx = 0
+	local cury = furiheight -- leave room for furigana at the top
+	local curh = 0
 	for i = 2, #lgroups-1 do
 		local lg = lgroups[i]
 		local prev = lgroups[i-1]
-		aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text='%s', basewidth=%f furiwidth=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.furiwidth)
+		aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text='%s', basewidth=%f, baseheight=%f, furiwidth=%f, furiheight=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
 		
 		-- Three cases: No furigana, furigana smaller than base and furigana larger than base
 		if lg.furiwidth == 0 then
-			-- Here wa can basically just place the base text
+			-- Here we can basically just place the base text
 			lg.left = curx
 			lg.right = lg.left + lg.basewidth
 			-- If there was any spillover from a previous group, add it to here
@@ -533,8 +557,18 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			lg.right = lg.left + lg.basewidth
 			curx = lg.right
 		end
-		aegisub.debug.out(5, "left=%f, right=%f\n", lg.left, lg.right)
+		lg.top = cury
+		lg.bottom = cury + lg.baseheight
+		curh = math.max(curh, lg.baseheight)
+		if lg.syls[#lg.syls].line_break then
+			cury = cury + curh + furiheight
+			curh = 0
+			curx = 0
+		end
+		aegisub.debug.out(5, "left=%f, right=%f, top=%f, bottom=%f\n", lg.left, lg.right, lg.top, lg.bottom)
 	end
+	cury = cury + curh
+	line.height = cury
 	
 	-- Now the groups are layouted, so place the individual syllables/furigana
 	for i, lg in ipairs(lgroups) do
@@ -546,6 +580,9 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			syl.center = syl.left + syl.width/2
 			syl.right = syl.left + syl.width
 			curx = syl.right + syl.postspacewidth
+			syl.top = lg.top
+			syl.middle = (lg.top + lg.bottom) / 2
+			syl.bottom = lg.bottom
 		end
 		if curx > line.width then line.width = curx end
 		-- Place furigana
@@ -561,6 +598,9 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			furi.center = furi.left + furi.width/2
 			furi.right = furi.left + furi.width
 			curx = furi.right
+			furi.top = lg.top - furi.height
+			furi.middle = lg.top - furi.height/2
+			furi.bottom = lg.top
 		end
 	end
 end
