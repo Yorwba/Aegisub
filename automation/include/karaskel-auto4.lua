@@ -475,6 +475,9 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		end
 		
 		-- Add this syllable to lg
+		if lg.basewidth == 0 then
+			lg.firstsyl = syl
+		end
 		lg.basewidth = lg.basewidth + syl.prespacewidth + syl.width + syl.postspacewidth
 		lg.baseheight = math.max(lg.baseheight, syl.height)
 		table.insert(lg.syls, syl)
@@ -576,6 +579,9 @@ function karaskel.do_furigana_layout(meta, styles, line)
 				if curx > line.width and not lg.syls[1].newline then
 					-- overflow, insert linebreak and retry
 					lg.syls[1].newline = true
+					-- eat space
+					lg.basewidth = lg.basewidth - lg.firstsyl.prespacewidth
+					lg.firstsyl.prespacewidth = 0
 					lg.leftspill = nil
 					lg.rightspill = nil
 					prev = lgsentinel
