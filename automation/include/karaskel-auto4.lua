@@ -330,7 +330,7 @@ function karaskel.preproc_line_size(meta, styles, line)
 	if styles[line.style .. "-furigana"] then
 		line.furistyle = styles[line.style .. "-furigana"]
 	else
-		aegisub.debug.out(4, "No furigana style defined for style '%s'\n", line.style)
+		aegisub.debug.out(4, "No furigana style defined for style %q\n", line.style)
 		line.furistyle = false
 	end
 	if line.furistyle then
@@ -476,7 +476,7 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		lg.basewidth = lg.basewidth + syl.prespacewidth + syl.width + syl.postspacewidth
 		lg.baseheight = math.max(lg.baseheight, syl.height)
 		table.insert(lg.syls, syl)
-		aegisub.debug.out(5, "\tAdding syllable to layout group: '%s', width=%d, isbreak=%s\n", syl.text_stripped, syl.width, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
+		aegisub.debug.out(5, "\tAdding syllable to layout group: %q, width=%d, isbreak=%s\n", syl.text_stripped, syl.width, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
 		
 		-- Add this syllable's furi to lg
 		for f = 1, syl.furi.n do
@@ -506,7 +506,7 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		local lg = lgroups[i]
 		if lg ~= lgsentinel then
 			local prev = lgroups[i-1]
-			aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text='%s', basewidth=%f, baseheight=%f, furiwidth=%f, furiheight=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
+			aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text=%q, basewidth=%f, baseheight=%f, furiwidth=%f, furiheight=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
 			if lg.syls[1].newline then
 				cury = cury + curh + furiheight
 				curh = 0
