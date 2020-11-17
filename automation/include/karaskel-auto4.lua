@@ -121,16 +121,22 @@ end
 
 -- Ensure that no "syllable" contains a line break
 function karaskel.preproc_split_linebreaks(syl)
-	local text = syl.text_stripped.."\n" -- guarantee there's always a \n
+	local text = syl.text_stripped
 	local lines = {}
 	local text_len = 0
 	local line_start = 1
 	for line_end in text:gmatch("()\n") do
 		local line = text:sub(line_start, line_end - 1)
+		if line == "" then
+			line = "\n"
+		end
 		table.insert(lines, line)
 		text_len = text_len + unicode.len(line)
 		line_start = line_end + 1
 	end
+	local line = text:sub(line_start, #text)
+	table.insert(lines, line)
+	text_len = text_len + unicode.len(line)
 	if text_len == 0 then
 		text_len = 1
 	end
@@ -455,8 +461,8 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		-- Furigana-less syllables always generate a new layout group
 		-- So do furigana-endowed syllables that are marked as split
 		-- But if current lg has no width (usually only first) don't create a new
-		aegisub.debug.out(5, "syl.furi.n=%d, isbreak=%s, last_had_furi=%s, lg.basewidth=%d\n", syl.furi.n, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n", last_had_furi and "y" or "n", lg.basewidth)
-		if (syl.newline or syl.furi.n == 0 or syl.furi[1].isbreak or not last_had_furi) and lg.basewidth > 0 then
+		aegisub.debug.out(5, "syl.furi.n=%d, isbreak=%s, last_had_furi=%s, lg.basewidth=%d, lg.baseheight=%d\n", syl.furi.n, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n", last_had_furi and "y" or "n", lg.basewidth, lg.baseheight)
+		if (syl.newline or syl.furi.n == 0 or syl.furi[1].isbreak or not last_had_furi) and (lg.basewidth > 0 or lg.baseheight > 0) then
 			aegisub.debug.out(5, "Inserting layout group, basewidth=%d, baseheight=%d, furiwidth=%d, furiheight=%d, isbreak=%s\n", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
 			table.insert(lgroups, lg)
 			if syl.newline then
