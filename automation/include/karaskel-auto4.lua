@@ -352,14 +352,6 @@ function karaskel.preproc_line_pos(meta, styles, line)
 	if not line.styleref then
 		karaskel.preproc_line_size(meta, styles, line)
 	end
-	
-	-- Syllable layouting must be done before the rest, since furigana layout may change the total width of the line
-	if line.furistyle then
-		karaskel.do_furigana_layout(meta, styles, line)
-	else
-		karaskel.do_basic_layout(meta, styles, line)
-	end
-
 	-- Effective margins
 	line.margin_v = line.margin_t
 	line.eff_margin_l = ((line.margin_l > 0) and line.margin_l) or line.styleref.margin_l
@@ -367,6 +359,16 @@ function karaskel.preproc_line_pos(meta, styles, line)
 	line.eff_margin_t = ((line.margin_t > 0) and line.margin_t) or line.styleref.margin_t
 	line.eff_margin_b = ((line.margin_b > 0) and line.margin_b) or line.styleref.margin_b
 	line.eff_margin_v = ((line.margin_v > 0) and line.margin_v) or line.styleref.margin_v
+	
+	line.width = meta.res_x - line.eff_margin_l - line.eff_margin_r -- set it to the maximum at first
+	
+	-- Syllable layouting must be done before alignment, since furigana layout may change the total width of the line
+	if line.furistyle then
+		karaskel.do_furigana_layout(meta, styles, line)
+	else
+		karaskel.do_basic_layout(meta, styles, line)
+	end
+
 	-- And positioning
 	if line.styleref.align == 1 or line.styleref.align == 4 or line.styleref.align == 7 then
 		-- Left aligned
@@ -507,66 +509,79 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		if lg ~= lgsentinel then
 			local prev = lgroups[i-1]
 			aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text=%q, basewidth=%f, baseheight=%f, furiwidth=%f, furiheight=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
-			if lg.syls[1].newline then
-				cury = cury + curh + furiheight
-				curh = 0
-				curx = 0
-			end
-			
-			-- Three cases: No furigana, furigana smaller than base and furigana larger than base
-			if lg.furiwidth == 0 then
-				-- Here we can basically just place the base text
-				lg.left = curx
-				lg.right = lg.left + lg.basewidth
-				-- If there was any spillover from a previous group, add it to here
-				if prev.rightspill  and prev.rightspill > 0 then
-					aegisub.debug.out(5, "eat rightspill=%f, ", prev.rightspill)
-					lg.leftspill = 0
-					lg.rightspill = prev.rightspill - lg.basewidth
-					prev.rightspill = 0
+			local retry = true
+			while retry do
+				retry = false
+				if lg.syls[1].newline then
+					cury = cury + curh + furiheight
+					curh = 0
+					curx = 0
 				end
-				curx = curx + lg.basewidth
-			elseif lg.furiwidth <= lg.basewidth then
-				-- If there was any rightspill from previous group, we have to stay 100% clear of that
-				if prev.rightspill and prev.rightspill > 0 then
-					aegisub.debug.out(5, "skip rightspill=%f, ", prev.rightspill)
-					curx = curx + prev.rightspill
-					prev.rightspill = 0
-				end
-				lg.left = curx
-				lg.right = lg.left + lg.basewidth
-				curx = curx + lg.basewidth
-				-- Negative spill here
-				lg.leftspill = (lg.furiwidth - lg.basewidth) / 2
-				lg.rightspill = lg.leftspill
-			else
-				-- Furigana is wider than base, we'll have to spill in some direction
-				if prev.rightspill and prev.rightspill > 0 then
-					aegisub.debug.out(5, "skip rightspill=%f, ", prev.rightspill)
-					curx = curx + prev.rightspill
-					prev.rightspill = 0
-				end
-				-- Do we spill only to the right or in both directions?
-				if lg.spillback then
-					-- Both directions
+				
+				-- Three cases: No furigana, furigana smaller than base and furigana larger than base
+				if lg.furiwidth == 0 then
+					-- Here we can basically just place the base text
+					lg.left = curx
+					lg.right = lg.left + lg.basewidth
+					-- If there was any spillover from a previous group, add it to here
+					if prev.rightspill and prev.rightspill > 0 then
+						aegisub.debug.out(5, "eat rightspill=%f, ", prev.rightspill)
+						lg.leftspill = 0
+						lg.rightspill = prev.rightspill - lg.basewidth
+						prev.rightspill = 0
+					end
+					curx = curx + lg.basewidth
+				elseif lg.furiwidth <= lg.basewidth then
+					-- If there was any rightspill from previous group, we have to stay 100% clear of that
+					if prev.rightspill and prev.rightspill > 0 then
+						aegisub.debug.out(5, "skip rightspill=%f, ", prev.rightspill)
+						curx = curx + prev.rightspill
+						prev.rightspill = 0
+					end
+					lg.left = curx
+					lg.right = lg.left + lg.basewidth
+					curx = curx + lg.basewidth
+					-- Negative spill here
 					lg.leftspill = (lg.furiwidth - lg.basewidth) / 2
 					lg.rightspill = lg.leftspill
-					aegisub.debug.out(5, "spill left=%f right=%f, ", lg.leftspill, lg.rightspill)
-					-- If there was any furigana or spill on previous syllable we can't overlap it
-					if prev.rightspill then
-						lg.left = curx + lg.leftspill
+				else
+					-- Furigana is wider than base, we'll have to spill in some direction
+					if prev.rightspill and prev.rightspill > 0 then
+						aegisub.debug.out(5, "skip rightspill=%f, ", prev.rightspill)
+						curx = curx + prev.rightspill
+						prev.rightspill = 0
+					end
+					-- Do we spill only to the right or in both directions?
+					if lg.spillback then
+						-- Both directions
+						lg.leftspill = (lg.furiwidth - lg.basewidth) / 2
+						lg.rightspill = lg.leftspill
+						aegisub.debug.out(5, "spill left=%f right=%f, ", lg.leftspill, lg.rightspill)
+						-- If there was any furigana or spill on previous syllable we can't overlap it
+						if prev.rightspill then
+							lg.left = curx + lg.leftspill
+						else
+							lg.left = curx
+						end
 					else
+						-- Only to the right
+						lg.leftspill = 0
+						lg.rightspill = lg.furiwidth - lg.basewidth
+						aegisub.debug.out(5, "spill right=%f, ", lg.rightspill)
 						lg.left = curx
 					end
-				else
-					-- Only to the right
-					lg.leftspill = 0
-					lg.rightspill = lg.furiwidth - lg.basewidth
-					aegisub.debug.out(5, "spill right=%f, ", lg.rightspill)
-					lg.left = curx
+					lg.right = lg.left + lg.basewidth
+					curx = lg.right
 				end
-				lg.right = lg.left + lg.basewidth
-				curx = lg.right
+				if curx > line.width and not lg.syls[1].newline then
+					-- overflow, insert linebreak and retry
+					lg.syls[1].newline = true
+					lg.leftspill = nil
+					lg.rightspill = nil
+					prev = lgsentinel
+					retry = true
+					aegisub.debug.out(5, "retrying overflow=%f, ", curx - line.width)
+				end
 			end
 			lg.top = cury
 			lg.bottom = cury + lg.baseheight
@@ -578,6 +593,7 @@ function karaskel.do_furigana_layout(meta, styles, line)
 	line.height = cury
 	
 	-- Now the groups are layouted, so place the individual syllables/furigana
+	line.width = 0 -- we'll find the true width during placement
 	for i, lg in ipairs(lgroups) do
 		local basecenter = (lg.left + lg.right) / 2 -- centered furi is centered over this
 		local curx = lg.left -- base text is placed from here on
