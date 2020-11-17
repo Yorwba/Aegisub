@@ -146,7 +146,7 @@ function karaskel.preproc_split_linebreaks(syl)
 			tag = syl.tag,
 			text = line,
 			text_stripped = line,
-			line_break = i < #lines,
+			newline = i ~= 1,
 		}
 		start_time = end_time
 	end
@@ -276,13 +276,13 @@ function karaskel.preproc_line_text(meta, styles, line)
 				worksyl.text_spacestripped = syltext
 				worksyl.prespace = prespace
 				worksyl.postspace = postspace
+				worksyl.newline = syl.newline
 			else
 				-- This is just an extra highlight
 				worksyl.duration = worksyl.duration + syl.duration
 				worksyl.kdur = worksyl.kdur + syl.duration / 10
 				worksyl.end_time = syl.end_time
 			end
-			worksyl.line_break = syl.line_break
 		end
 	end
 	-- Add the last syllable
@@ -418,6 +418,11 @@ function karaskel.do_basic_layout(meta, styles, line)
 	local curh = 0
 	for i = 0, line.kara.n do
 		local syl = line.kara[i]
+		if syl.newline then
+			cury = cury + curh
+			curh = 0
+			curx = 0
+		end
 		syl.left = curx + syl.prespacewidth
 		syl.center = syl.left + syl.width / 2
 		syl.right = syl.left + syl.width
@@ -426,11 +431,6 @@ function karaskel.do_basic_layout(meta, styles, line)
 		syl.middle = cury + syl.height / 2
 		syl.bottom = cury + syl.height
 		curh = syl.max(curh, syl.height)
-		if syl.line_break then
-			cury = cury + curh
-			curh = 0
-			curx = 0
-		end
 	end
 	cury = cury + curh
 	line.height = cury
@@ -456,7 +456,7 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		-- So do furigana-endowed syllables that are marked as split
 		-- But if current lg has no width (usually only first) don't create a new
 		aegisub.debug.out(5, "syl.furi.n=%d, isbreak=%s, last_had_furi=%s, lg.basewidth=%d\n", syl.furi.n, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n", last_had_furi and "y" or "n", lg.basewidth)
-		if (syl.furi.n == 0 or syl.furi[1].isbreak or not last_had_furi) and lg.basewidth > 0 then
+		if (syl.newline or syl.furi.n == 0 or syl.furi[1].isbreak or not last_had_furi) and lg.basewidth > 0 then
 			aegisub.debug.out(5, "Inserting layout group, basewidth=%d, baseheight=%d, furiwidth=%d, furiheight=%d, isbreak=%s\n", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight, syl.furi.n > 0 and syl.furi[1].isbreak and "y" or "n")
 			table.insert(lgroups, lg)
 			lg = { basewidth=0, baseheight=0, furiwidth=0, furiheight=0, syls={}, furi={}, spillback=false }
@@ -480,10 +480,6 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			aegisub.debug.out(5, "\tAdding furigana to layout group: %s (width=%d)\n", furi.text, furi.width)
 			last_had_furi = true
 		end
-
-		if syl.line_break then
-			last_had_furi = false
-		end
 	end
 	-- Insert last lg
 	aegisub.debug.out(5, "Inserting layout group, basewidth=%d, baseheight=%d, furiwidth=%d, furiheight=%d\n", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
@@ -501,6 +497,11 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		local lg = lgroups[i]
 		local prev = lgroups[i-1]
 		aegisub.debug.out(5, "Layout group, nsyls=%d, nfuri=%d, syl1text='%s', basewidth=%f, baseheight=%f, furiwidth=%f, furiheight=%f, ", #lg.syls, #lg.furi, lg.syls[1] and lg.syls[1].text or "", lg.basewidth, lg.baseheight, lg.furiwidth, lg.furiheight)
+		if lg.syls[1].newline then
+			cury = cury + curh + furiheight
+			curh = 0
+			curx = 0
+		end
 		
 		-- Three cases: No furigana, furigana smaller than base and furigana larger than base
 		if lg.furiwidth == 0 then
@@ -560,11 +561,6 @@ function karaskel.do_furigana_layout(meta, styles, line)
 		lg.top = cury
 		lg.bottom = cury + lg.baseheight
 		curh = math.max(curh, lg.baseheight)
-		if lg.syls[#lg.syls].line_break then
-			cury = cury + curh + furiheight
-			curh = 0
-			curx = 0
-		end
 		aegisub.debug.out(5, "left=%f, right=%f, top=%f, bottom=%f\n", lg.left, lg.right, lg.top, lg.bottom)
 	end
 	cury = cury + curh
