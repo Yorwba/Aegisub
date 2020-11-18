@@ -503,10 +503,12 @@ function karaskel.do_furigana_layout(meta, styles, line)
 
 	aegisub.debug.out(5, "\nProducing layout from %d layout groups\n", #lgroups-1)
 	-- Layout the groups at macro-level
-	-- Skip sentinel at ends in loop
+	local current_line = { width = 0 }
+	local lines = { current_line }
 	local curx = 0
 	local cury = furiheight -- leave room for furigana at the top
 	local curh = 0
+	-- Skip sentinel at ends in loop
 	for i = 2, #lgroups-1 do
 		local lg = lgroups[i]
 		if lg ~= lgsentinel then
@@ -516,6 +518,8 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			while retry do
 				retry = false
 				if lg.syls[1].newline then
+					current_line = { width = 0 }
+					table.insert(lines, current_line)
 					cury = cury + curh + furiheight
 					curh = 0
 					curx = 0
@@ -592,6 +596,8 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			lg.top = cury
 			lg.bottom = cury + lg.baseheight
 			curh = math.max(curh, lg.baseheight)
+			current_line.width = math.max(current_line.width, curx)
+			table.insert(current_line, lg)
 			aegisub.debug.out(5, "left=%f, right=%f, top=%f, bottom=%f\n", lg.left, lg.right, lg.top, lg.bottom)
 		end
 	end
@@ -630,6 +636,19 @@ function karaskel.do_furigana_layout(meta, styles, line)
 			furi.top = lg.top - furi.height
 			furi.middle = lg.top - furi.height/2
 			furi.bottom = lg.top
+		end
+	end
+
+	-- Find out how much slack there is in each line
+	for i, current_line in ipairs(lines) do
+		local slack = line.width - current_line.width
+		for j, lg in ipairs(current_line) do
+			for s, syl in ipairs(lg.syls) do
+				syl.slack = slack
+			end
+			for f, furi in ipairs(lg.furi) do
+				furi.slack = slack
+			end
 		end
 	end
 end
